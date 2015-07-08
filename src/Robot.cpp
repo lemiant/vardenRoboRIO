@@ -7,29 +7,18 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <algorithm>
+#include <iomanip>
+#include "VardenEncoder.cpp"
 
 using namespace std;
 
-void debug(const char *msg) {
+#define TOP_SPEED 6.5
 
-}
-
-void error(const char *msg) {
+void error(const char * msg) {
 	printf(msg);
 	printf("\r\n");
 	exit(1);
 }
-
-/**
- * This is a demo program showing the use of the RobotDrive class.
- * The SampleRobot class is the base of a robot application that will automatically call your
- * Autonomous and OperatorControl methods at the right time as controlled by the switches on
- * the driver station or the field controls.
- *
- * WARNING: While it may look like a good choice to use for your code if you're inexperienced,
- * don't. Unless you know what you are doing, complex code will be much more difficult under
- * this system. Use IterativeRobot or Command-Based instead if you're new.
- */
 class Robot: public SampleRobot {
 
 	Joystick m_stick;
@@ -38,6 +27,10 @@ class Robot: public SampleRobot {
 	Victor EnableControl;
 	AnalogInput SteeringPot;
 	AnalogOutput ThrottleOut;
+	VardenEncoder leftWheel;
+	VardenEncoder rightWheel;
+	string FatalError = "";
+	double lastCCCenter;
 
 public:
 	Robot():
@@ -46,41 +39,16 @@ public:
 		EnableControl(4),
 		SteeringPot(0),
 		ThrottleOut(0),
-		m_stick(0) // Initialize Joystick on port 0.
+		m_stick(0), // Initialize Joystick on port 0.
+		leftWheel(3, 4, true, Encoder::EncodingType::k4X, 0.1, 0.02198), // 63 ticks/rev
+		rightWheel(1, 2, true, Encoder::EncodingType::k1X, 0.1, 0.001333) // 1024 ticks/rev
 	{
-
 	}
 
 	void Disabled() {
 		printf("Disabled Mode\r\n");
-		/*while(true) {
-			steerTo(1);
-			Wait(0.01);
-		}*/
 	}
 
-	void steerTo(double target) {
-		target = min(max(-25.0, target), 25.0);
-		double pos = SteeringPot.GetVoltage();
-		if (pos < 0.5) {
-			return;
-		}
-		pos = (pos-2.75)*-20;
-		//printf("%f - %f\r\n", target, pos, (target-pos)*-0.1);
-		SteerOut.Set((target-pos)*0.1);
-	}
-
-	void throttleTo(double target) {
-		double thr = min(max(0., 5*target), 5.);
-		double brk = min(max(0., -0.5*target), 0.4);
-		cout << thr << " " << brk << endl;
-		ThrottleOut.SetVoltage(thr);
-		BrakeOut.Set(brk);
-	}
-
-	/**
-	 * Drive left & right motors for 2 seconds then stop
-	 */
 	void Autonomous() {
 		printf("Auto mode\r\n");
 		double _lastUpdate = 0;
@@ -109,26 +77,76 @@ public:
 				steer = atof(str.substr(0,split).c_str());
 				throttle = atof(str.substr(split+1).c_str());
 
-				cout << str << " " << split
-					<< " -- " << str.substr(0,split) << " " << str.substr(split+1)
-					<< " -- " << steer << " " << throttle << endl;
-
 				_lastUpdate = Timer::GetFPGATimestamp();
 				n = recv(sockfd, buffer, 256, MSG_DONTWAIT);
 			}
-
-			if (Timer::GetFPGATimestamp() - _lastUpdate < 0.1) {
-				steerTo(steer);
-				throttleTo(throttle);
-			} else {
-				printf("Timed Out\r\n");
-				SteerOut.Set(0);
-				ThrottleOut.SetVoltage(0);
-			}
+			this->autonomousPeriodic(steer, throttle, _lastUpdate);
 
 			Wait(0.01);
 		}
 		close(sockfd);
+	}
+
+
+	void steerTo(double target) {
+		target = min(max(-25.0, target), 25.0);
+		double pos = SteeringPot.GetVoltage();
+		if (pos < 0.5) {
+			this->FatalError = "Pot Disconnected";
+			return;
+		}
+		pos = (pos-2.75)*-20;
+		//printf("%f - %f\r\n", target, pos, (target-pos)*-0.1);
+		SteerOut.Set((target-pos)*0.1);
+	}
+
+	void throttleTo(double target) {
+		target = min(max(-1., target), 1.);
+		double thr = 5*max(0., target);
+		double brk = 0.55*max(0., -target);
+		//cout << thr << " " << brk << endl;
+		ThrottleOut.SetVoltage(thr);
+		BrakeOut.Set(brk);
+	}
+
+	double cruiseControl(double targetSpeed) {
+		double left = this->leftWheel.GetRate();
+		double right = this->rightWheel.GetRate();
+		if (abs(left-right) > 0.2*max(left, right) + 0.3*TOP_SPEED) {
+			this->FatalError = "Encoders returning wildly different values";
+			return -1;
+		}
+
+		double avgSpeed = (left+right)/2.0;
+		double feedForward = targetSpeed/TOP_SPEED;
+		double proportional = 3.5*(targetSpeed - avgSpeed)/TOP_SPEED;
+		double output = feedForward + proportional;
+		if (output < 0) {
+			output -= 0.25;
+		} else if (output < 0) {
+			output = 0;
+		}
+		return output;
+	}
+
+	void autonomousPeriodic(double steer, double throttle, double lastUpdate){
+		this->leftWheel.tick();
+		this->rightWheel.tick();
+		if (!this->FatalError.empty()) {
+			cout << "FATAL ERROR: " << this->FatalError << endl;
+			SteerOut.Set(0);
+			throttleTo(-1);
+		} else if (lastUpdate < Timer::GetFPGATimestamp() - 0.1) {
+			cout << "Timed Out" << endl;
+			SteerOut.Set(0);
+			throttleTo(-1);
+		} else {
+			steerTo(steer);
+			if (throttle > 0) {
+				throttle = this->cruiseControl(throttle);
+			}
+			throttleTo(throttle);
+		}
 	}
 
 	/**
@@ -136,13 +154,21 @@ public:
 	 */
 	void OperatorControl() {
 		printf("Op Control");
+		double setPoint = 0;
+		cout << std::fixed << std::setprecision(2);
 
 		while (IsOperatorControl() && IsEnabled()) {
+			this->leftWheel.tick();
+			this->rightWheel.tick();
 			EnableControl.Set(1);
-			double x = m_stick.GetY();
-			int sign = x>0?0:1;
-			x = x*x*sign;
-			throttleTo(x);
+			double live = -m_stick.GetY();
+			if(m_stick.GetRawButton(1)) {
+				setPoint = live;
+			}
+			double output = this->cruiseControl(setPoint*TOP_SPEED);
+
+			cout << live << " " << setPoint << " " << output << " " << (this->leftWheel.GetRate()+this->rightWheel.GetRate())/(2*TOP_SPEED) << endl;
+			throttleTo(output);
 			Wait(0.01);
 		}
 
@@ -153,6 +179,13 @@ public:
 	 */
 	void Test() {
 		printf("Test");
+
+		while (IsTest() && IsEnabled()) {
+			cout << this->leftWheel.GetRate() << " " << this->rightWheel.GetRate() << endl;
+			Wait(0.02);
+			this->leftWheel.tick();
+			this->rightWheel.tick();
+		}
 	}
 };
 
