@@ -110,13 +110,15 @@ public:
 	}
 
 	double cruiseControl(double targetSpeed) {
-		double left = this->leftWheel.GetRate();
-		double right = this->rightWheel.GetRate();
-		if (abs(left-right) > 0.2*max(left, right) + 0.3*TOP_SPEED) {
+		double lt_left = this->leftWheel.GetLongTermRate();
+		double lt_right = this->rightWheel.GetLongTermRate();
+		if (abs(lt_left-lt_right) > (0.25*max(lt_left, lt_right) + 0.2*TOP_SPEED)) {
 			this->FatalError = "Encoders returning wildly different values";
 			return -1;
 		}
 
+		double left = this->leftWheel.GetRate();
+		double right = this->rightWheel.GetRate();
 		double avgSpeed = (left+right)/2.0;
 		double feedForward = targetSpeed/TOP_SPEED;
 		double proportional = 3.5*(targetSpeed - avgSpeed)/TOP_SPEED;
