@@ -1,0 +1,6 @@
+Debug/
+build.xml
+sysProps.xml
+build.properties
+**/.*
+!.gitignore
