@@ -113,15 +113,14 @@ public:
 		double lt_left = this->leftWheel.GetLongTermRate();
 		double lt_right = this->rightWheel.GetLongTermRate();
 		if (abs(lt_left-lt_right) > (0.25*max(lt_left, lt_right) + 0.2*TOP_SPEED)) {
-			this->FatalError = "Encoders returning wildly different values";
-			return -1;
+			cout << "WARNING: Encoders returning wildly different values";
 		}
 
 		double left = this->leftWheel.GetRate();
 		double right = this->rightWheel.GetRate();
-		double avgSpeed = (left+right)/2.0;
+		double topSpeed = max(left, right);
 		double feedForward = targetSpeed/TOP_SPEED;
-		double proportional = 3.5*(targetSpeed - avgSpeed)/TOP_SPEED;
+		double proportional = 3*(targetSpeed - topSpeed)/TOP_SPEED;
 		double output = feedForward + proportional;
 		if (output < 0) {
 			output -= 0.25;

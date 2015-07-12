@@ -14,7 +14,7 @@ struct EncoderSample {
 	}
 };
 
-#define LT_WINDOW 0.5
+#define LT_WINDOW 3.0
 
 class VardenEncoder {
 	Encoder target;
