@@ -13,6 +13,7 @@
 using namespace std;
 
 #define TOP_SPEED 6.5
+#define TIMEOUT 0.08
 
 void error(const char * msg) {
 	printf(msg);
@@ -22,9 +23,9 @@ void error(const char * msg) {
 class Robot: public SampleRobot {
 
 	Joystick m_stick;
-	Victor SteerOut;
-	Victor BrakeOut;
-	Victor EnableControl;
+	CANTalon BrakeOut;
+	CANTalon SteerOut;
+	Relay EnableControl;
 	AnalogInput SteeringPot;
 	AnalogOutput ThrottleOut;
 	VardenEncoder leftWheel;
@@ -34,9 +35,9 @@ class Robot: public SampleRobot {
 
 public:
 	Robot():
-		SteerOut(6),
-		BrakeOut(5),
-		EnableControl(4),
+		BrakeOut(0),
+		SteerOut(1),
+		EnableControl(0),
 		SteeringPot(0),
 		ThrottleOut(0),
 		m_stick(0), // Initialize Joystick on port 0.
@@ -46,45 +47,74 @@ public:
 	}
 
 	void Disabled() {
+		EnableControl.Set(Relay::kOff);
 		printf("Disabled Mode\r\n");
 	}
 
 	void Autonomous() {
 		printf("Auto mode\r\n");
-		double _lastUpdate = 0;
-		int sockfd;
-		char buffer[256];
-		struct sockaddr_in serv_addr;
+		int data_sock, enable_sock;
+		char data_buffer[256], enable_buffer[256];
+		struct sockaddr_in data_addr, enable_addr;
+
+		enable_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (enable_sock < 0)
+			error("ERROR opening data socket");
+		bzero((char *) &enable_addr, sizeof(enable_addr));
+		enable_addr.sin_family = AF_INET;
+		enable_addr.sin_addr.s_addr = INADDR_ANY;
+		enable_addr.sin_port = htons(1170);
+		if (bind(enable_sock, (struct sockaddr *) &enable_addr, sizeof(enable_addr)) < 0)
+			error("ERROR on binding data socket");
+
+
+		data_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (data_sock < 0)
+			error("ERROR opening data socket");
+		bzero((char *) &data_addr, sizeof(data_addr));
+		data_addr.sin_family = AF_INET;
+		data_addr.sin_addr.s_addr = INADDR_ANY;
+		data_addr.sin_port = htons(1180);
+		if (bind(data_sock, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0)
+			error("ERROR on binding data socket");
+
 		int n;
+		double last_update=0, last_enable=0;
 		double steer = 0, throttle = 0;
-		printf("Bind new socket\r\n");
-		sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if (sockfd < 0)
-			error("ERROR opening socket");
-		bzero((char *) &serv_addr, sizeof(serv_addr));
-		serv_addr.sin_family = AF_INET;
-		serv_addr.sin_addr.s_addr = INADDR_ANY;
-		serv_addr.sin_port = htons(1180);
-		if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-			error("ERROR on binding");
+
 		while (IsAutonomous() && IsEnabled()) {
-			EnableControl.Set(1);
-			bzero(buffer, 256);
-			n = recv(sockfd, buffer, 256, MSG_DONTWAIT);
+			EnableControl.Set(Relay::kForward);
+
+			bzero(enable_buffer, 256);
+			n = recv(enable_sock, enable_buffer, 256, MSG_DONTWAIT);
 			while(n > 0) {
-				string str(buffer);
+				if (enable_buffer[0] == '1') {
+					last_enable = Timer::GetFPGATimestamp();
+				} else {
+					last_enable = 0;
+				}
+
+				n = recv(enable_sock, enable_buffer, 256, MSG_DONTWAIT);
+			}
+
+			bzero(data_buffer, 256);
+			n = recv(data_sock, data_buffer, 256, MSG_DONTWAIT);
+			while(n > 0) {
+				string str(data_buffer);
 				int split = str.find(',');
 				steer = atof(str.substr(0,split).c_str());
 				throttle = atof(str.substr(split+1).c_str());
 
-				_lastUpdate = Timer::GetFPGATimestamp();
-				n = recv(sockfd, buffer, 256, MSG_DONTWAIT);
+				last_update = Timer::GetFPGATimestamp();
+				n = recv(data_sock, data_buffer, 256, MSG_DONTWAIT);
 			}
-			this->autonomousPeriodic(steer, throttle, _lastUpdate);
+			this->autonomousPeriodic(steer, throttle, last_enable, last_update);
 
 			Wait(0.01);
 		}
-		close(sockfd);
+
+		close(enable_sock);
+		close(data_sock);
 	}
 
 
@@ -97,14 +127,20 @@ public:
 		}
 		pos = (pos-2.75)*-20;
 		//printf("%f - %f\r\n", target, pos, (target-pos)*-0.1);
-		SteerOut.Set((target-pos)*0.1);
+		SteerOut.Set((target-pos)*0.25);
 	}
 
 	void throttleTo(double target) {
+		double thr, brk;
 		target = min(max(-1., target), 1.);
-		double thr = 5*max(0., target);
-		double brk = 0.55*max(0., -target);
-		//cout << thr << " " << brk << endl;
+		if (target > 0) {
+			thr = 5*target;
+			brk = -0.05;
+		} else {
+			thr = 0;
+			brk = 0.55*-target;
+		}
+		cout << thr << " " << brk << endl;
 		ThrottleOut.SetVoltage(thr);
 		BrakeOut.Set(brk);
 	}
@@ -120,27 +156,30 @@ public:
 		double right = this->rightWheel.GetRate();
 		double topSpeed = max(left, right);
 		double feedForward = targetSpeed/TOP_SPEED;
-		double proportional = 3*(targetSpeed - topSpeed)/TOP_SPEED;
+		double proportional = 1*(targetSpeed - topSpeed)/TOP_SPEED;
 		double output = feedForward + proportional;
 		if (output < 0) {
 			output -= 0.25;
-		} else if (output < 0) {
-			output = 0;
 		}
 		return output;
 	}
 
-	void autonomousPeriodic(double steer, double throttle, double lastUpdate){
+	void autonomousPeriodic(double steer, double throttle, double last_enable, double last_update){
 		this->leftWheel.tick();
 		this->rightWheel.tick();
 		if (!this->FatalError.empty()) {
 			cout << "FATAL ERROR: " << this->FatalError << endl;
 			SteerOut.Set(0);
 			throttleTo(-1);
-		} else if (lastUpdate < Timer::GetFPGATimestamp() - 0.1) {
-			cout << "Timed Out" << endl;
+		} else if (min(last_update, last_enable) < Timer::GetFPGATimestamp() - 0.1) {
 			SteerOut.Set(0);
 			throttleTo(-1);
+			if (last_update < Timer::GetFPGATimestamp() - 0.1) {
+				cout << "Timed Out" << endl;
+			}
+			if (last_enable < Timer::GetFPGATimestamp() - 0.1) {
+				cout << "E-stopped" << endl;
+			}
 		} else {
 			steerTo(steer);
 			if (throttle > 0) {
@@ -161,7 +200,7 @@ public:
 		while (IsOperatorControl() && IsEnabled()) {
 			this->leftWheel.tick();
 			this->rightWheel.tick();
-			EnableControl.Set(1);
+			EnableControl.Set(Relay::kForward);
 			double live = -m_stick.GetY();
 			if(m_stick.GetRawButton(1)) {
 				setPoint = live;
