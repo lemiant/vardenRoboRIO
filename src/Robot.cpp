@@ -126,7 +126,6 @@ public:
 			return;
 		}
 		pos = (pos-2.75)*-20;
-		//printf("%f - %f\r\n", target, pos, (target-pos)*-0.1);
 		SteerOut.Set((target-pos)*0.25);
 	}
 
@@ -135,12 +134,11 @@ public:
 		target = min(max(-1., target), 1.);
 		if (target > 0) {
 			thr = 5*target;
-			brk = -0.05;
+			brk = -0.04;
 		} else {
 			thr = 0;
 			brk = 0.55*-target;
 		}
-		cout << thr << " " << brk << endl;
 		ThrottleOut.SetVoltage(thr);
 		BrakeOut.Set(brk);
 	}
@@ -168,17 +166,17 @@ public:
 		this->leftWheel.tick();
 		this->rightWheel.tick();
 		if (!this->FatalError.empty()) {
-			cout << "FATAL ERROR: " << this->FatalError << endl;
+			cout << "FATAL:" << this->FatalError << endl;
 			SteerOut.Set(0);
 			throttleTo(-1);
 		} else if (min(last_update, last_enable) < Timer::GetFPGATimestamp() - 0.1) {
 			SteerOut.Set(0);
 			throttleTo(-1);
 			if (last_update < Timer::GetFPGATimestamp() - 0.1) {
-				cout << "Timed Out" << endl;
+				cout << "ERROR: Timed Out" << endl;
 			}
 			if (last_enable < Timer::GetFPGATimestamp() - 0.1) {
-				cout << "E-stopped" << endl;
+				cout << "ERROR: E-stopped" << endl;
 			}
 		} else {
 			steerTo(steer);
@@ -207,7 +205,6 @@ public:
 			}
 			double output = this->cruiseControl(setPoint*TOP_SPEED);
 
-			cout << live << " " << setPoint << " " << output << " " << (this->leftWheel.GetRate()+this->rightWheel.GetRate())/(2*TOP_SPEED) << endl;
 			throttleTo(output);
 			Wait(0.01);
 		}
