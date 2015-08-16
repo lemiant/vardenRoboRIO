@@ -8,6 +8,8 @@
 #include <netinet/in.h>
 #include <algorithm>
 #include <iomanip>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "VardenEncoder.cpp"
 
 using namespace std;
@@ -27,6 +29,7 @@ class Robot: public SampleRobot {
 	CANTalon SteerOut;
 	Relay EnableControl;
 	AnalogInput SteeringPot;
+	AnalogInput Pedal;
 	AnalogOutput ThrottleOut;
 	VardenEncoder leftWheel;
 	VardenEncoder rightWheel;
@@ -39,6 +42,7 @@ public:
 		SteerOut(1),
 		EnableControl(0),
 		SteeringPot(0),
+		Pedal(1),
 		ThrottleOut(0),
 		m_stick(0), // Initialize Joystick on port 0.
 		leftWheel(3, 4, true, Encoder::EncodingType::k4X, 0.1, 0.02198), // 63 ticks/rev
@@ -55,7 +59,7 @@ public:
 		printf("Auto mode\r\n");
 		int data_sock, enable_sock;
 		char data_buffer[256], enable_buffer[256];
-		struct sockaddr_in data_addr, enable_addr;
+		struct sockaddr_in data_addr, enable_addr, laptop_addr;
 
 		enable_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if (enable_sock < 0)
@@ -77,6 +81,12 @@ public:
 		data_addr.sin_port = htons(1180);
 		if (bind(data_sock, (struct sockaddr *) &data_addr, sizeof(data_addr)) < 0)
 			error("ERROR on binding data socket");
+
+		bzero((char *) &laptop_addr, sizeof(laptop_addr));
+		laptop_addr.sin_family = AF_INET;
+		laptop_addr.sin_port = htons(1160);
+		inet_aton("192.168.0.100", &laptop_addr.sin_addr);
+		/**/
 
 		int n;
 		double last_update=0, last_enable=0;
@@ -108,6 +118,11 @@ public:
 				last_update = Timer::GetFPGATimestamp();
 				n = recv(data_sock, data_buffer, 256, MSG_DONTWAIT);
 			}
+
+			if (this->Pedal.GetAverageVoltage() > 1) {
+				sendto(data_sock, "go", 2, MSG_DONTWAIT, (struct sockaddr*)&laptop_addr, sizeof laptop_addr);
+			}/**/
+
 			this->autonomousPeriodic(steer, throttle, last_enable, last_update);
 
 			Wait(0.01);
@@ -119,14 +134,14 @@ public:
 
 
 	void steerTo(double target) {
-		target = min(max(-25.0, target), 25.0);
+		target = min(max(-34.0, target), 34.0);
 		double pos = SteeringPot.GetVoltage();
 		if (pos < 0.5) {
 			this->FatalError = "Pot Disconnected";
 			return;
 		}
 		pos = (pos-2.75)*-20;
-		SteerOut.Set((target-pos)*0.15);
+		SteerOut.Set((target-pos)*0.22);
 	}
 
 	void throttleTo(double target) {
@@ -154,7 +169,7 @@ public:
 		double right = this->rightWheel.GetRate();
 		double topSpeed = max(left, right);
 		double feedForward = targetSpeed/TOP_SPEED;
-		double proportional = 2.5*(targetSpeed - topSpeed)/TOP_SPEED;
+		double proportional = 2*(targetSpeed - topSpeed)/TOP_SPEED;
 		double output = feedForward + proportional;
 		if (output < 0) {
 			output -= 0.25;
@@ -163,22 +178,24 @@ public:
 	}
 
 	void autonomousPeriodic(double steer, double throttle, double last_enable, double last_update){
-		cout << "Auto Periodic" << endl;
+		cout << "Auto Periodic: " << steer <<" "<< throttle <<" "<< last_enable <<" "<< last_update << endl;
 		this->leftWheel.tick();
 		this->rightWheel.tick();
 		if (!this->FatalError.empty()) {
 			cout << "FATAL:" << this->FatalError << endl;
 			SteerOut.Set(0);
 			throttleTo(-1);
-		} else if (min(last_update, last_enable) < Timer::GetFPGATimestamp() - 0.1) {
+		//} else if (min(last_update, last_enable) < Timer::GetFPGATimestamp() - 0.1) {
+		} else if (last_update < Timer::GetFPGATimestamp() - 0.1) {
 			SteerOut.Set(0);
 			throttleTo(-1);
 			if (last_update < Timer::GetFPGATimestamp() - 0.1) {
 				cout << "ERROR: Timed Out" << endl;
 			}
-			if (last_enable < Timer::GetFPGATimestamp() - 0.1) {
-				cout << "ERROR: E-stopped" << endl;
-			}
+//			if (last_enable < Timer::GetFPGATimestamp() - 0.1) {
+//				cout << "ERROR: E-stopped" << endl;
+//			}
+//
 		} else {
 			steerTo(steer);
 			if (throttle > 0) {
