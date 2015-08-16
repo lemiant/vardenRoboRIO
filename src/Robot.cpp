@@ -126,7 +126,7 @@ public:
 			return;
 		}
 		pos = (pos-2.75)*-20;
-		SteerOut.Set((target-pos)*0.25);
+		SteerOut.Set((target-pos)*0.15);
 	}
 
 	void throttleTo(double target) {
@@ -134,10 +134,10 @@ public:
 		target = min(max(-1., target), 1.);
 		if (target > 0) {
 			thr = 5*target;
-			brk = -0.04;
+			brk = -0.08;
 		} else {
 			thr = 0;
-			brk = 0.55*-target;
+			brk = 0.5*-target;
 		}
 		ThrottleOut.SetVoltage(thr);
 		BrakeOut.Set(brk);
@@ -147,14 +147,14 @@ public:
 		double lt_left = this->leftWheel.GetLongTermRate();
 		double lt_right = this->rightWheel.GetLongTermRate();
 		if (abs(lt_left-lt_right) > (0.25*max(lt_left, lt_right) + 0.2*TOP_SPEED)) {
-			cout << "WARNING: Encoders returning wildly different values";
+			cout << "WARNING: Encoders returning wildly different values" << endl;
 		}
 
 		double left = this->leftWheel.GetRate();
 		double right = this->rightWheel.GetRate();
 		double topSpeed = max(left, right);
 		double feedForward = targetSpeed/TOP_SPEED;
-		double proportional = 1*(targetSpeed - topSpeed)/TOP_SPEED;
+		double proportional = 2.5*(targetSpeed - topSpeed)/TOP_SPEED;
 		double output = feedForward + proportional;
 		if (output < 0) {
 			output -= 0.25;
@@ -163,6 +163,7 @@ public:
 	}
 
 	void autonomousPeriodic(double steer, double throttle, double last_enable, double last_update){
+		cout << "Auto Periodic" << endl;
 		this->leftWheel.tick();
 		this->rightWheel.tick();
 		if (!this->FatalError.empty()) {
